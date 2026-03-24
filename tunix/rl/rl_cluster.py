@@ -38,9 +38,9 @@ from jax.sharding import Mesh  # pylint: disable=g-importing-member
 import jaxtyping
 import numpy as np
 import optax
+from tunix.generate import tokenizer_adapter
 # Internal placeholder for sglang_jax rollout worker stub, don't change this line.
 # Internal placeholder for vllm rollout worker stub, don't change this line.
-from tunix.generate import tokenizer_adapter
 from tunix.perf import metrics as perf_metrics
 from tunix.perf import trace as perf_trace
 from tunix.perf.experimental import constants as perf_constants
@@ -50,6 +50,7 @@ from tunix.rl import trainer as rl_trainer
 from tunix.rl import utils as rl_utils
 from tunix.rl.inference import inference_worker
 from tunix.rl.rollout import base_rollout
+from tunix.rl.rollout import mock_rollout
 from tunix.rl.rollout import vanilla_rollout
 from tunix.sft import metrics_logger
 from tunix.sft import peft_trainer
@@ -200,6 +201,16 @@ class RLCluster:
 
     self._default_memory_kind = jax.devices()[0].default_memory().kind
     self.train_actor = self._load_model(actor, self.r2m[Role.ACTOR])
+
+    if self.cluster_config.rollout_config is None:
+      raise ValueError("`cluster_config.rollout_config` cannot be None.")
+    if isinstance(
+        self.cluster_config.rollout_config, dict
+    ) and not self.cluster_config.rollout_config.get(Mode.TRAIN):
+      raise ValueError(
+          "Rollout config is a dict but missing a train config. Provided"
+          f" config: {self.cluster_config.rollout_config}"
+      )
 
     if Role.ROLLOUT in self._backbone_sharing_map[Role.ACTOR]:
       self.rollout_actor = self.train_actor
@@ -357,16 +368,21 @@ class RLCluster:
         "vanilla",
         "vllm",
         "sglang_jax",
+        "mock",
     ]:
       raise ValueError(
-          "`cluster_config.rollout_engine` should be one of `'vanilla'` or"
-          " `'vllm'` or `'sglang_jax'`. Received:"
+          "`cluster_config.rollout_engine` should be one of `'vanilla'`, "
+          "`'vllm'`, `'sglang_jax'`, or `'mock'`. Received:"
           f" '{self.cluster_config.rollout_engine}'."
       )
+
     if isinstance(self.cluster_config.rollout_config, dict):
+      # train_cfg should always be provided.
+      train_cfg = self.cluster_config.rollout_config[Mode.TRAIN]
+      eval_cfg = self.cluster_config.rollout_config.get(Mode.EVAL)
       max_kv_cache_size = max(
-          self.cluster_config.rollout_config[Mode.TRAIN].kv_cache_size,
-          self.cluster_config.rollout_config[Mode.EVAL].kv_cache_size,
+          train_cfg.kv_cache_size,
+          eval_cfg.kv_cache_size if eval_cfg is not None else 0,
       )
     else:
       max_kv_cache_size = self.cluster_config.rollout_config.kv_cache_size
@@ -391,16 +407,10 @@ class RLCluster:
     elif self.cluster_config.rollout_engine == "vllm":
       from tunix.rl.rollout import vllm_rollout
 
-      loaded_vllm_config = None
-      if isinstance(
-          self.cluster_config.rollout_config, base_rollout.RolloutConfig
-      ):
-        loaded_vllm_config = self.cluster_config.rollout_config
-      elif isinstance(self.cluster_config.rollout_config, dict):
+      if isinstance(self.cluster_config.rollout_config, dict):
         loaded_vllm_config = self.cluster_config.rollout_config[Mode.TRAIN]
-
-      if loaded_vllm_config is None:
-        raise ValueError("Rollout vllm model config is missing!")
+      else:
+        loaded_vllm_config = self.cluster_config.rollout_config
 
       if loaded_vllm_config.rollout_vllm_model_version is None:
         raise ValueError("Rollout vllm model version or path is missing!")
@@ -422,16 +432,12 @@ class RLCluster:
     elif self.cluster_config.rollout_engine == "sglang_jax":
       from tunix.rl.rollout import sglang_jax_rollout
 
-      if isinstance(
-          self.cluster_config.rollout_config, base_rollout.RolloutConfig
-      ):
-        loaded_sglang_jax_config = self.cluster_config.rollout_config
-      elif isinstance(self.cluster_config.rollout_config, dict):
+      if isinstance(self.cluster_config.rollout_config, dict):
         loaded_sglang_jax_config = self.cluster_config.rollout_config[
             Mode.TRAIN
         ]
       else:
-        raise ValueError("Rollout sglang jax model config is missing!")
+        loaded_sglang_jax_config = self.cluster_config.rollout_config
 
       if (
           sft_utils.is_lora_enabled(self.rollout_actor)
@@ -450,6 +456,21 @@ class RLCluster:
           self.tokenizer,
           mesh=self.r2m[Role.ROLLOUT],
           rollout_config=loaded_sglang_jax_config,
+      )
+    elif self.cluster_config.rollout_engine == "mock":
+      if isinstance(
+          self.cluster_config.rollout_config, base_rollout.RolloutConfig
+      ):
+        loaded_mock_config = self.cluster_config.rollout_config
+      elif isinstance(self.cluster_config.rollout_config, dict):
+        loaded_mock_config = self.cluster_config.rollout_config[Mode.TRAIN]
+      else:
+        loaded_mock_config = None
+
+      self._rollout = mock_rollout.MockRollout(
+          model=self.rollout_actor,
+          tokenizer=self.tokenizer,
+          rollout_config=loaded_mock_config,
       )
     elif (
         isinstance(self.cluster_config.rollout_engine, type)

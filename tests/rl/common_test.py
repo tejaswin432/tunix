@@ -117,6 +117,23 @@ class CommonTest(parameterized.TestCase):
         atol=1e-03,
     )
 
+  def test_process_ids_raises_value_error(self):
+    prompt_tokens = jnp.array([[1, 2], [3, 4]])
+    completion_tokens = jnp.array([[5, 6], [7, 8]])
+    segment_ids = jnp.array([[1, 1, 2, 2], [1, 1, 2, 2]])
+    with self.assertRaisesRegex(
+        ValueError,
+        "Positions must be explicitly provided for packed sequences.",
+    ):
+      common.process_ids(
+          prompt_tokens,
+          completion_tokens,
+          pad_id=0,
+          eos_id=-1,
+          segment_ids=segment_ids,
+          positions=None,
+      )
+
   def test_compute_per_token_logps(self):
     model = tc.ToyTransformer(config=tc.ModelConfig(), rngs=nnx.Rngs(0))
     prompt_tokens = jnp.array([[1, 2, 3, 4], [0, 0, 1, 2], [0, 1, 2, 3]])

@@ -1404,6 +1404,69 @@ class UtilsTest(parameterized.TestCase):
     self.assertTrue(jnp.allclose(result.params[src_key], expected))
 
 
+  def test_transfer_state_directly_fuses_moe_weights(self):
+    """Tests that wi_0 and wi_1 are fused into wi when target expects it."""
+    wi_0_val = jnp.array([[1.0, 2.0], [5.0, 6.0]], dtype=jnp.float32)
+    wi_1_val = jnp.array([[3.0, 4.0], [7.0, 8.0]], dtype=jnp.float32)
+    
+    src_state = nnx.Dict(
+        layers=nnx.Dict(
+            wi_0=nnx.Param(wi_0_val),
+            wi_1=nnx.Param(wi_1_val),
+        )
+    )
+    
+    dst_state = nnx.Dict(
+        layers=nnx.Dict(
+            wi=nnx.Param(jnp.zeros((2, 4), dtype=jnp.float32))
+        )
+    )
+
+    mock_reshard = lambda source, target: source
+    utils.transfer_state_directly(src_state, dst_state, reshard_fn=mock_reshard)
+
+    expected_wi = jnp.concatenate([wi_0_val, wi_1_val], axis=-1)
+    np.testing.assert_array_equal(
+        dst_state['layers']['wi'][...],
+        expected_wi,
+    )
+
+  def test_transfer_state_directly_fuses_moe_weights_scanned_to_unrolled(self):
+    """Scanned wi_0/wi_1 are unstacked and fused into per-layer wi (unrolled dst)."""
+    # 2 layers, 2 experts, 2 features each -> fused shape [2, 4] per layer
+    wi_0_val = jnp.array(
+        [[[1., 2.], [5., 6.]], [[10., 20.], [50., 60.]]], dtype=jnp.float32
+    )  # [num_layers=2, experts=2, features=2]
+    wi_1_val = jnp.array(
+        [[[3., 4.], [7., 8.]], [[30., 40.], [70., 80.]]], dtype=jnp.float32
+    )
+
+    src_state = nnx.Dict(
+        layers=nnx.Dict(
+            wi_0=nnx.Param(wi_0_val),
+            wi_1=nnx.Param(wi_1_val),
+        )
+    )
+    dst_state = nnx.Dict(**{
+        'layers_0': nnx.Dict(wi=nnx.Param(jnp.zeros((2, 4), dtype=jnp.float32))),
+        'layers_1': nnx.Dict(wi=nnx.Param(jnp.zeros((2, 4), dtype=jnp.float32))),
+    })
+
+    mock_reshard = lambda source, target: source
+    utils.transfer_state_directly(
+        src_state, dst_state, reshard_fn=mock_reshard, scan_axis=0
+    )
+
+    np.testing.assert_array_equal(
+        dst_state['layers_0']['wi'][...],
+        jnp.concatenate([wi_0_val[0], wi_1_val[0]], axis=-1),
+    )
+    np.testing.assert_array_equal(
+        dst_state['layers_1']['wi'][...],
+        jnp.concatenate([wi_0_val[1], wi_1_val[1]], axis=-1),
+    )
+
+
 class ResolveParallelismSizesTest(parameterized.TestCase):
 
   def _make_mesh(self, total_devices):

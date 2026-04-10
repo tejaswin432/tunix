@@ -18,6 +18,8 @@ Tunix supports multiple rollout engines (selected by `rollout_engine`):
 - `vanilla`: Tunix-native generation. This option provides the basic inference engine without advanced features.
 - `vllm`: vLLM-backed generation. The vLLM engine is backed by `vllm` and Google supported `tpu-inference` backend.
 - `sglang_jax`: SG-Lang JAX rollout. This is another advanced inference backend from the sglang OSS community.
+- `mock`: Mock rollout worker. Simulates generation and tensor outputs without
+    requiring a real model or accelerator resources, ideal for testing the pipeline.
 
 `vllm` and `sglang` provide better performance with large batch size and agentic RL.
 
@@ -511,4 +513,66 @@ cluster_config = rl_cluster_lib.ClusterConfig(
 - Reduce `kv_cache_size` (KV cache scales with batch size and `kv_cache_size`).
 - Reduce `max_prompt_length` and/or `max_tokens_to_generate`.
 
+## Mock
 
+This section explains how to use the **mock** rollout engine, which is useful for
+testing the RL pipeline infrastructure without requiring heavy model weights or
+accelerator hardware.
+
+### How the integration works
+
+At a high level:
+
+- When `rollout_engine="mock"`, Tunix uses `MockRollout` instead of a real inference engine.
+- **Text Generation**: It generates random sequences of words from a dummy list.
+- **Latency Simulation**: It sleeps for a random duration between `rollout_mock_min_generation_time`
+    and `rollout_mock_max_generation_time` to simulate inference delay.
+- **Tensors**: It returns arrays of zeros for logits and log probabilities as NumPy
+    arrays. This keeps the data on the **host** (CPU) memory and avoids device
+    memory allocation, making the mock extremely lightweight.
+- **RNG Seeding**: If a seed is provided in `rollout_config`, it is used to
+    initialize the RNG in `__init__`, ensuring that successive calls to `generate`
+    advance the state but remain deterministic as a sequence.
+
+### Choosing mock as the Rollout
+
+Set `cluster_config.rollout_engine="mock"`.
+
+Rollout engine selection happens in `tunix/rl/rl_cluster.py`.
+
+### Configuration knobs
+
+In addition to common sampling parameters, you can use:
+
+- `rollout_mock_min_generation_time`: Minimum sleep time in seconds.
+- `rollout_mock_max_generation_time`: Maximum sleep time in seconds.
+- `rollout_mock_length_distribution`: The distribution type for mock generated sequence lengths. Supported modes:
+    - `"uniform"`: Random length. Defaults to full range `[1, max_tokens]`. **Best for**: Broad testing of load and handling varying lengths without specific distribution assumptions.
+    - `"normal"`: Bell curve. Defaults to `mean = max_tokens / 2`. **Best for**: Testing scenarios where lengths are expected to cluster around a typical response length.
+    - `"skewed"`: Right-skewed. Defaults to `mean = max_tokens / 4`. **Best for**: Simulating realistic LLM behavior where most responses are short but a few are very long.
+    - `"fixed"`: Exactly `mean` tokens. **Best for**: Deterministic testing or benchmarking specific fixed workloads.
+- `rollout_mock_length_mean`: Optional float to override the default mean for the distribution.
+- `rollout_mock_length_std`: Optional float to override the default standard deviation for the distribution.
+
+Passing a `rollout_config` is optional for the mock engine. If omitted, it uses sensible defaults.
+
+### Example: using mock rollout in a Python entrypoint
+
+```python
+from tunix.rl import rl_cluster as rl_cluster_lib
+from tunix.rl.rollout import base_rollout
+
+cluster_config = rl_cluster_lib.ClusterConfig(
+    role_to_mesh=role_to_mesh,
+    rollout_engine="mock",
+    training_config=training_config,
+    # rollout_config is optional
+)
+
+rl_cluster = rl_cluster_lib.RLCluster(
+    actor=actor_model,
+    reference=reference_model,
+    tokenizer=tokenizer,
+    cluster_config=cluster_config,
+)
+```

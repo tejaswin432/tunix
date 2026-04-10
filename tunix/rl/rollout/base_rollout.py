@@ -227,6 +227,20 @@ class RolloutConfig:
       default_factory=dict
   )
 
+  # Mock rollout configs.
+  # Minimum and maximum generation time for mock rollout in seconds.
+  rollout_mock_min_generation_time: float = 0.1
+  rollout_mock_max_generation_time: float = 5.0
+
+  # Distribution type for mock generated sequence lengths.
+  # Options: "uniform", "normal", "skewed", "fixed"
+  rollout_mock_length_distribution: str = "uniform"
+
+  # Target mean and standard deviation for the mock generated sequence length.
+  # If None, defaults to reasonable values based on distribution.
+  rollout_mock_length_mean: Optional[float] = None
+  rollout_mock_length_std: Optional[float] = None
+
 
 class BaseRollout(ABC):
   """Base RolloutWorker."""

@@ -117,7 +117,6 @@ parser.add_argument("--compute_logps_micro_batch_size", type=int, default=1)
 parser.add_argument("--max_turns", type=int, default=20)
 parser.add_argument("--per_turn_timeout_secs", type=int, default=300)
 parser.add_argument("--max_concurrency", type=int, default=1)
-parser.add_argument("--context_ratio", type=int, default=2)
 
 
 # Other
@@ -294,10 +293,7 @@ MAX_TURNS = args.max_turns
 PER_TURN_TIMEOUT_SECS = args.per_turn_timeout_secs
 
 MAX_CONCURRENCY = args.max_concurrency
-CONTEXT_RATIO = args.context_ratio  # Context length can be up to 2x responselength in DeepSWE due to multi-turn interactions and long responses, so we set context ratio to 2 to accommodate this.
-KV_CACHE_SIZE = MAX_PROMPT_LENGTH + (
-    MAX_RESPONSE_LENGTH * CONTEXT_RATIO * MAX_TURNS
-)
+KV_CACHE_SIZE = MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH + 128
 print(f"kv_cache_size (Capped): {KV_CACHE_SIZE}")
 # === AdamW, warmup, cosine scheduler ===
 LEARNING_RATE = args.learning_rate
@@ -316,8 +312,6 @@ DO_MEM_PROFILING = args.do_mem_profiling
 ROLLOUT_ENGINE = args.rollout_engine
 CKPT_DIR = args.ckpt_dir
 
-# Max number of sequences to be processed in parallel by vllm.
-VLLM_MAX_NUM_SEQS = ROLLOUT_MICRO_BATCH_SIZE * NUM_GENERATIONS
 
 VLLM_UTILIZATION = args.vllm_utilization
 
@@ -327,7 +321,7 @@ VLLM_MAX_NUM_SEQS = ROLLOUT_MICRO_BATCH_SIZE * NUM_GENERATIONS  # 1 * 2 = 2
 # Max number of tokens to be processed in parallel by vllm.
 # Divide by 8 for on policy, 1 step off divide by 4
 
-VLLM_MAX_BATCHED_TOKENS = (VLLM_MAX_NUM_SEQS * KV_CACHE_SIZE) // 4
+VLLM_MAX_BATCHED_TOKENS = (VLLM_MAX_NUM_SEQS * KV_CACHE_SIZE) // 8
 print(f"vllm_max_batched_tokens: {VLLM_MAX_BATCHED_TOKENS}")
 # %%
 # ==========================================

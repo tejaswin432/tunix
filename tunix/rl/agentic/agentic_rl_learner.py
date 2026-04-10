@@ -26,7 +26,7 @@ import dataclasses
 import itertools
 import queue
 import threading
-from typing import Any, AsyncIterator, Callable, Dict, Generic, Iterable, Iterator, List, Sequence, Type, TypeVar
+from typing import Any, AsyncIterator, Callable, Dict, Generic, Iterable, Iterator, List, Sequence, Type, TypeVar, Optional, Set
 
 from absl import logging
 import flax
@@ -78,6 +78,8 @@ class AgenticRLConfig(algo_config_lib.AlgorithmConfig):
     num_generations: Number of samples per prompt.
     num_iterations: Number of iterations per batch.
     episode_timeout: Timeout for each episode in seconds.
+    filter_statuses: Set of trajectory statuses to filter out.
+    overlong_filter: Whether to filter out overlong trajectories.
   """
 
   system_prompt: str = ""
@@ -90,6 +92,8 @@ class AgenticRLConfig(algo_config_lib.AlgorithmConfig):
   num_generations: int = 1
   num_iterations: int = 1
   episode_timeout: float = 1800.0
+  filter_statuses: Optional[Set] = None
+  overlong_filter: bool = False
 
 
 TConfig = TypeVar("TConfig", bound=AgenticRLConfig)
@@ -425,6 +429,7 @@ class AgenticRLLearner(abc.ABC, Generic[TConfig]):
         tokenizer=self.tokenizer,
         chat_parser=self.chat_parser,
         timeout=self.algo_config.episode_timeout,
+        max_response_length=self.algo_config.max_response_length,
         perf_v2=self.rl_cluster.perf_v2,
     )
     return rollout_orchestrator.RolloutOrchestrator(
